@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SPHEREx Sky Timeline</title>
+<meta name="description" content="Visor público para ver cómo cambia el cielo con el tiempo usando imágenes infrarrojas de la misión SPHEREx de NASA.">
+<meta property="og:title" content="SPHEREx Sky Timeline">
+<meta property="og:description" content="Recorre el tiempo, compara fechas y detecta objetos que se mueven en el cielo infrarrojo.">
+<style>
+  :root { --bg:#0b0e17; --panel:#141a2b; --line:#26304d; --text:#e8ecf6; --muted:#8e99b8; --accent:#ff9f4a; --cool:#4ac8ff; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui, sans-serif; }
+  header { padding:18px 20px 6px; max-width:1100px; margin:0 auto; }
+  h1 { margin:0; font-size:22px; letter-spacing:.3px; }
+  header p { margin:4px 0 0; color:var(--muted); max-width:70ch; }
+  main { max-width:1100px; margin:0 auto; padding:14px 20px 30px; display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:18px; }
+  @media (max-width:820px) { main { grid-template-columns:1fr; } }
+  .stage { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px; }
+  canvas { width:100%; aspect-ratio:1/1; display:block; background:#000; border-radius:8px; }
+  .hud { display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; margin:8px 2px 0; color:var(--muted); font-size:13px; }
+  .hud b { color:var(--text); font-weight:600; }
+  aside { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; display:flex; flex-direction:column; gap:14px; align-self:start; }
+  label { display:block; font-size:12px; color:var(--muted); margin-bottom:4px; text-transform:uppercase; letter-spacing:.6px; }
+  select, input[type=range] { width:100%; }
+  select { background:#0d1322; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:7px; }
+  .row { display:flex; gap:6px; }
+  button { flex:1; background:#0d1322; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px 6px; cursor:pointer; font:inherit; }
+  button:hover { border-color:var(--accent); }
+  button.on { background:var(--accent); color:#1a1000; border-color:var(--accent); font-weight:600; }
+  .note { font-size:12.5px; color:var(--muted); border-top:1px solid var(--line); padding-top:10px; }
+  .badge { display:inline-block; background:#3a2410; color:var(--accent); border:1px solid #6b4220; border-radius:99px; padding:1px 9px; font-size:12px; margin-left:6px; vertical-align:middle; }
+  footer { max-width:1100px; margin:0 auto; padding:0 20px 24px; color:var(--muted); font-size:12.5px; }
+  a { color:var(--cool); }
+</style>
+</head>
+<body>
+<header>
+  <h1>SPHEREx Sky Timeline <span id="demoBadge" class="badge" hidden>datos simulados</span></h1>
+  <p>Mira cómo cambia una región del cielo con el tiempo en luz infrarroja. Los objetos que se mueven (cometas, asteroides) aparecen en posiciones distintas entre una imagen y otra.</p>
+</header>
+
+<main>
+  <section class="stage">
+    <canvas id="view" width="400" height="400"></canvas>
+    <div class="hud">
+      <span>Cuadro <b id="hFrame">–</b></span>
+      <span id="hDate">–</span>
+      <span id="hBand">–</span>
+    </div>
+  </section>
+
+  <aside>
+    <div>
+      <label for="target">Objetivo</label>
+      <select id="target"></select>
+    </div>
+
+    <div>
+      <label>Modo de vista</label>
+      <div class="row">
+        <button data-mode="normal" class="on">Normal</button>
+        <button data-mode="blink">Blink</button>
+        <button data-mode="diff">Cambios</button>
+      </div>
+    </div>
+
+    <div>
+      <label for="slider">Tiempo (cuadro A)</label>
+      <input id="slider" type="range" min="0" max="0" value="0">
+      <div class="row" style="margin-top:8px">
+        <button id="play">▶ Reproducir</button>
+      </div>
+    </div>
+
+    <div id="blinkBox" hidden>
+      <label for="sliderB">Cuadro B (se alterna con A)</label>
+      <input id="sliderB" type="range" min="0" max="0" value="0">
+    </div>
+
+    <div id="diffBox" hidden>
+      <label for="gain">Sensibilidad</label>
+      <input id="gain" type="range" min="1" max="12" value="5">
+    </div>
+
+    <div class="note" id="modeNote"></div>
+  </aside>
+</main>
+
+<footer>
+  <p><b>Acerca de:</b> proyecto del NASA Space Apps Challenge 2026 (Boca del Río) para el reto SPHEREx. Los cuadros se ordenan por fecha de observación y se alinean a una misma cuadrícula del cielo.</p>
+  <p>Datos: misión SPHEREx de NASA, archivo <a href="https://irsa.ipac.caltech.edu/Missions/spherex.html" target="_blank" rel="noopener">NASA/IPAC IRSA</a>. Cada cuadro puede ser de una banda de color distinta, así que parte de lo que cambia es el color y no el objeto. Este proyecto no es un producto oficial de la NASA.</p>
+</footer>
+
+<script>
+const MODE_NOTES = {
+  normal: "Recorre el tiempo con el deslizador o reproduce la secuencia.",
+  blink: "Alterna dos fechas. Lo que parpadea o salta de lugar se movió o cambió de brillo.",
+  diff: "Resta la imagen típica (mediana de todos los cuadros). Naranja: más brillo que lo normal. Azul: menos. Los objetos móviles destacan."
+};
+
+const S = { frames: [], w: 0, h: 0, mode: "normal", i: 0, j: 0, playing: false, timer: null, blinkTimer: null, blinkPhase: false, median: null };
+const $ = id => document.getElementById(id);
+const canvas = $("view"), ctx = canvas.getContext("2d");
+
+/* ---------- Carga de datos ---------- */
+async function loadIndex() {
+  try {
+    const r = await fetch("data/index.json");
+    if (!r.ok) throw new Error();
+    const list = await r.json();
+    if (!list.length) throw new Error();
+    return list;
+  } catch { return []; }
+}
+
+function loadImage(src) {
+  return new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = src; });
+}
+
+async function loadTarget(id) {
+  if (id === "__demo__") return setFrames(makeDemo(), true);
+  const m = await (await fetch(`data/${id}/manifest.json`)).json();
+  const off = document.createElement("canvas"), octx = off.getContext("2d", { willReadFrequently: true });
+  const frames = [];
+  for (const f of m.frames) {
+    const im = await loadImage(`data/${id}/${f.file}`);
+    off.width = im.width; off.height = im.height;
+    octx.drawImage(im, 0, 0);
+    const rgba = octx.getImageData(0, 0, im.width, im.height).data;
+    const gray = new Uint8ClampedArray(im.width * im.height);
+    for (let k = 0; k < gray.length; k++) gray[k] = rgba[k * 4];
+    frames.push({ gray, w: im.width, h: im.height, date: f.date, band: f.band });
+  }
+  setFrames(frames, false);
+}
+
+function setFrames(frames, demo) {
+  stop();
+  S.frames = frames; S.w = frames[0].w; S.h = frames[0].h; S.i = 0; S.j = frames.length - 1; S.median = null;
+  canvas.width = S.w; canvas.height = S.h;
+  for (const id of ["slider", "sliderB"]) { $(id).max = frames.length - 1; }
+  $("slider").value = 0; $("sliderB").value = S.j;
+  $("demoBadge").hidden = !demo;
+  render();
+}
+
+/* ---------- Datos simulados para desarrollar la interfaz ---------- */
+function makeDemo() {
+  const W = 220, H = 220, N = 30;
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const stars = Array.from({ length: 70 }, () => ({ x: rnd() * W, y: rnd() * H, a: 40 + rnd() * 200, s: 0.9 + rnd() * 0.8 }));
+  const variable = { x: 150, y: 60, s: 1.4 };
+  const frames = [];
+  for (let n = 0; n < N; n++) {
+    const g = new Float32Array(W * H);
+    for (let k = 0; k < g.length; k++) g[k] = 18 + rnd() * 10;
+    const blob = (cx, cy, a, s) => {
+      const r = Math.ceil(s * 3);
+      for (let y = Math.max(0, Math.floor(cy - r)); y <= Math.min(H - 1, cy + r); y++)
+        for (let x = Math.max(0, Math.floor(cx - r)); x <= Math.min(W - 1, cx + r); x++)
+          g[y * W + x] += a * Math.exp(-((x - cx) ** 2 + (y - cy) ** 2) / (2 * s * s));
+    };
+    stars.forEach(s => blob(s.x, s.y, s.a, s.s));
+    blob(variable.x, variable.y, 70 + 70 * Math.sin(n / 3), variable.s);          // estrella variable
+    blob(20 + n * 6.5, 40 + n * 5.2, 150, 1.5);                                     // asteroide simulado
+    const gray = new Uint8ClampedArray(W * H);
+    for (let k = 0; k < gray.length; k++) gray[k] = 255 * Math.pow(Math.min(1, g[k] / 255), 0.55);
+    const d = new Date(Date.UTC(2026, 5, 1 + n * 3, 4, 0));
+    frames.push({ gray, w: W, h: H, date: d.toISOString().slice(0, 16).replace("T", " ") + " UTC", band: "simulado" });
+  }
+  return frames;
+}
+
+/* ---------- Dibujo ---------- */
+function lut(v) { // gris -> tono infrarrojo cálido
+  return [Math.min(255, v * 1.25), v * 0.78, v * 0.42];
+}
+
+function computeMedian() {
+  const n = S.frames.length, len = S.w * S.h, med = new Uint8ClampedArray(len), buf = new Uint8Array(n);
+  for (let p = 0; p < len; p++) {
+    for (let f = 0; f < n; f++) buf[f] = S.frames[f].gray[p];
+    buf.sort();
+    med[p] = buf[n >> 1];
+  }
+  S.median = med;
+}
+
+function paint(frameIdx) {
+  const fr = S.frames[frameIdx], img = ctx.createImageData(S.w, S.h), d = img.data;
+  if (S.mode === "diff") {
+    if (!S.median) computeMedian();
+    const gain = +$("gain").value;
+    for (let p = 0; p < fr.gray.length; p++) {
+      const diff = (fr.gray[p] - S.median[p]) * gain, q = p * 4;
+      const m = Math.min(255, Math.abs(diff));
+      if (diff >= 0) { d[q] = m; d[q + 1] = m * 0.6; d[q + 2] = m * 0.2; }
+      else { d[q] = m * 0.2; d[q + 1] = m * 0.7; d[q + 2] = m; }
+      d[q + 3] = 255;
+    }
+  } else {
+    for (let p = 0; p < fr.gray.length; p++) {
+      const [r, g, b] = lut(fr.gray[p]), q = p * 4;
+      d[q] = r; d[q + 1] = g; d[q + 2] = b; d[q + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+function render() {
+  if (!S.frames.length) return;
+  const idx = (S.mode === "blink" && S.blinkPhase) ? S.j : S.i, fr = S.frames[idx];
+  paint(idx);
+  $("hFrame").textContent = `${idx + 1} / ${S.frames.length}` + (S.mode === "blink" ? (S.blinkPhase ? " (B)" : " (A)") : "");
+  $("hDate").textContent = fr.date;
+  $("hBand").textContent = "Banda: " + fr.band;
+}
+
+/* ---------- Controles ---------- */
+function stop() {
+  S.playing = false; clearInterval(S.timer); $("play").textContent = "▶ Reproducir";
+}
+function togglePlay() {
+  if (S.playing) return stop();
+  S.playing = true; $("play").textContent = "⏸ Pausar";
+  S.timer = setInterval(() => { S.i = (S.i + 1) % S.frames.length; $("slider").value = S.i; render(); }, 220);
+}
+function setMode(m) {
+  S.mode = m;
+  document.querySelectorAll("[data-mode]").forEach(b => b.classList.toggle("on", b.dataset.mode === m));
+  $("blinkBox").hidden = m !== "blink"; $("diffBox").hidden = m !== "diff";
+  $("modeNote").textContent = MODE_NOTES[m];
+  clearInterval(S.blinkTimer); S.blinkPhase = false;
+  if (m === "blink") { stop(); S.blinkTimer = setInterval(() => { S.blinkPhase = !S.blinkPhase; render(); }, 600); }
+  render();
+}
+
+$("slider").oninput = e => { S.i = +e.target.value; render(); };
+$("sliderB").oninput = e => { S.j = +e.target.value; render(); };
+$("gain").oninput = render;
+$("play").onclick = togglePlay;
+document.querySelectorAll("[data-mode]").forEach(b => b.onclick = () => setMode(b.dataset.mode));
+$("target").onchange = e => loadTarget(e.target.value);
+
+(async function init() {
+  const list = await loadIndex();
+  const sel = $("target");
+  list.forEach(t => sel.add(new Option(t.name, t.id)));
+  sel.add(new Option("Demo simulada (asteroide + estrella variable)", "__demo__"));
+  setMode("normal");
+  try {
+    await loadTarget(sel.value);
+  } catch (err) {
+    console.warn("No se pudieron cargar los datos, usando la demo simulada.", err);
+    sel.value = "__demo__";
+    await loadTarget("__demo__");
+  }
+})();
+</script>
+</body>
+</html>
