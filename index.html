@@ -114,7 +114,7 @@
     <div class="note" id="modeNote"></div>
     <div class="row"><button id="save">Guardar imagen</button><button id="share">Copiar enlace</button></div>
     <div id="staticBox" hidden>
-      <label for="examples">Ejemplos pre-descargados</label>
+      <label for="examples">Objetivos con imágenes reales (listos al instante)</label>
       <select id="examples"></select>
     </div>
     <button id="demoBtn" type="button">Ver demo simulada</button>
@@ -471,7 +471,6 @@ $("share").onclick = async () => {
   if (list.length) {
     $("staticBox").hidden = false;
     const sel = $("examples");
-    sel.add(new Option("Elige un ejemplo…", ""));
     list.forEach(t => sel.add(new Option(t.name, t.id)));
   }
   const h = new URLSearchParams(location.hash.slice(1));
@@ -479,6 +478,10 @@ $("share").onclick = async () => {
     $("ra").value = h.get("ra"); $("dec").value = h.get("dec");
     if (["0.03", "0.06", "0.1"].includes(h.get("size"))) $("size").value = h.get("size");
     $("form").requestSubmit();
+  } else if (list.length) {
+    // Hay datos reales pre-descargados: se muestran de inmediato (no dependen de IRSA ni del navegador).
+    $("examples").value = list[0].id;
+    await loadStatic(list[0].id);
   } else {
     setFrames(makeDemo(), true);
     status("Escribe unas coordenadas (o toca un ejemplo) para ver imágenes reales de SPHEREx. Por ahora se muestran datos simulados.");
