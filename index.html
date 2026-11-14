@@ -62,9 +62,9 @@
     <div><label for="ra">Ascensión recta (RA)</label><input id="ra" placeholder="83.8221  o  05:35:17" inputmode="text" required></div>
     <div><label for="dec">Declinación (Dec)</label><input id="dec" placeholder="-5.3911  o  -05:23:28" inputmode="text" required></div>
     <div><label for="size">Campo de visión</label>
-      <select id="size"><option value="0.08">0.08° (≈ 5′)</option><option value="0.15" selected>0.15° (≈ 9′)</option><option value="0.3">0.3° (≈ 18′)</option></select></div>
+      <select id="size"><option value="0.03">0.03° (≈ 2′)</option><option value="0.06" selected>0.06° (≈ 4′)</option><option value="0.1">0.1° (≈ 6′)</option></select></div>
     <div><label for="nframes">Cuadros</label>
-      <select id="nframes"><option>20</option><option selected>40</option><option>60</option></select></div>
+      <select id="nframes"><option>8</option><option selected>12</option><option>20</option></select></div>
     <div><button id="go" class="primary" type="submit">Ver línea del tiempo</button><button id="cancel" type="button" hidden>Cancelar</button></div>
   </form>
   <div class="chips">Ejemplos:
@@ -137,8 +137,9 @@ const CONFIG = {
   PROXY: "",
   TAP: "https://irsa.ipac.caltech.edu/TAP/sync",
   PIXEL_SCALE: 6.2,       // arcsec por pixel de la cuadrícula común
-  CONCURRENCY: 4,
-  TIMEOUT_MS: 150000
+  CONCURRENCY: 5,
+  TAP_TIMEOUT_MS: 120000,        // tiempo máximo para la consulta al catálogo
+  DOWNLOAD_TIMEOUT_MS: 180000    // tiempo máximo para bajar los recortes (si se acaba, se muestra lo que haya llegado)
 };
 const viaProxy = url => CONFIG.PROXY ? CONFIG.PROXY + encodeURIComponent(url) : url;
 
@@ -185,19 +186,35 @@ function sampleEvenly(list, max) {
 async function search(ra, dec, size, maxFrames) {
   stop(); setBusy(true); progress(0.03);
   const ctrl = new AbortController(); S.abort = ctrl;
-  const timeout = setTimeout(() => ctrl.abort("timeout"), CONFIG.TIMEOUT_MS);
+  let phase = "tap", timer = setTimeout(() => ctrl.abort("timeout"), CONFIG.TAP_TIMEOUT_MS);
+  const got = [];                      // cuadros ya descargados: se muestran aunque la búsqueda se corte
+  let totalObs = 0;
+  const showGot = msg => {
+    got.sort((a, b) => a.t - b.t);
+    S.label = `ra${ra.toFixed(3)}_dec${dec.toFixed(3)}`;
+    setFrames(got, false);
+    status(msg, "ok");
+  };
   try {
-    status("Consultando el archivo oficial de la NASA (IRSA)… puede tardar hasta un minuto.");
+    const t0 = Date.now();
+    status("Consultando el archivo oficial de la NASA (IRSA)… puede tardar hasta 2 minutos.");
     const csv = await tapQuery(SkyLib.buildQuery(ra, dec, size), ctrl.signal);
+    clearTimeout(timer);
+    const tTap = Math.round((Date.now() - t0) / 1000);
     const obs = SkyLib.rowsToObjects(SkyLib.parseCSV(csv)).filter(o => o.uri);
+    totalObs = obs.length;
     if (!obs.length) { status("IRSA no tiene imágenes de SPHEREx para esa posición todavía. Prueba con otro punto.", "err"); progress(0); return; }
+
+    phase = "download";
+    timer = setTimeout(() => ctrl.abort("timeout"), CONFIG.DOWNLOAD_TIMEOUT_MS);
     const pick = sampleEvenly(obs, maxFrames);
-    status(`IRSA tiene ${obs.length} observaciones de ese punto. Descargando ${pick.length} recortes…`);
+    status(`IRSA tiene ${obs.length} observaciones de ese punto (la consulta tardó ${tTap} s). Descargando recortes 0/${pick.length}…`);
     progress(0.12);
 
-    const N = Math.max(16, Math.round(size * 3600 / CONFIG.PIXEL_SCALE));
+    const N = Math.max(8, Math.round(size * 3600 / CONFIG.PIXEL_SCALE));
+    const t1 = Date.now();
     let done = 0, failures = 0, lastErr = null;
-    const frames = await mapLimit(pick, CONFIG.CONCURRENCY, async o => {
+    await mapLimit(pick, CONFIG.CONCURRENCY, async o => {
       try {
         const r = await fetch(viaProxy(o.uri), { signal: ctrl.signal });
         if (!r.ok) throw new Error("HTTP " + r.status);
@@ -205,31 +222,36 @@ async function search(ra, dec, size, maxFrames) {
         const wcs = SkyLib.makeWCS(img.hdr);
         if (!wcs) throw new Error("sin WCS");
         const g = SkyLib.toGray(SkyLib.reproject(img, wcs, N, ra, dec, CONFIG.PIXEL_SCALE));
-        if (!g) return null;
+        if (!g) return;
         const t = SkyLib.mjdToMs(parseFloat(o.time_bounds_lower));
-        return { ...g, w: N, h: N, t, date: fmtDate(t), band: o.energy_bandpassname || "–" };
+        got.push({ ...g, w: N, h: N, t, date: fmtDate(t), band: o.energy_bandpassname || "–" });
       } catch (e) {
         if (ctrl.signal.aborted) throw e;
-        failures++; lastErr = e; return null;
-      } finally { done++; progress(0.12 + 0.85 * done / pick.length); }
+        failures++; lastErr = e;
+      } finally {
+        done++; progress(0.12 + 0.85 * done / pick.length);
+        if (!ctrl.signal.aborted) status(`IRSA tiene ${obs.length} observaciones de ese punto. Descargando recortes ${done}/${pick.length}…`);
+      }
     });
-    const ok = frames.filter(Boolean);
-    if (!ok.length) {
-      const e = new Error("no se pudo descargar ningún recorte"); e.cause = lastErr; throw e;
-    }
-    ok.sort((a, b) => a.t - b.t);
-    S.label = `ra${ra.toFixed(3)}_dec${dec.toFixed(3)}`;
-    setFrames(ok, false);
-    status(`Listo: ${ok.length} cuadros de ${obs.length} observaciones disponibles.` + (failures ? ` (${failures} no se pudieron descargar)` : ""), "ok");
+    clearTimeout(timer);
+    if (!got.length) { const e = new Error("no se pudo descargar ningún recorte"); e.cause = lastErr; throw e; }
+    const tDl = Math.round((Date.now() - t1) / 1000);
+    showGot(`Listo: ${got.length} cuadros de ${obs.length} observaciones (consulta ${tTap} s, recortes ${tDl} s).` + (failures ? ` ${failures} no se pudieron descargar.` : ""));
     progress(1); setTimeout(() => progress(0), 800);
   } catch (e) {
     progress(0);
-    if (ctrl.signal.aborted) status(ctrl.signal.reason === "timeout" ? "La consulta tardó demasiado. Prueba con un campo más chico o intenta de nuevo." : "Búsqueda cancelada.", "err");
-    else if (e instanceof TypeError || (e.cause instanceof TypeError)) {
+    const aborted = ctrl.signal.aborted, byUser = ctrl.signal.reason === "user";
+    if (aborted && phase === "download" && got.length >= 2) {
+      showGot(`${byUser ? "Búsqueda detenida" : "Se agotó el tiempo"}: se muestran los ${got.length} cuadros que alcanzaron a llegar (de ${totalObs} observaciones). Prueba con menos cuadros o un campo más chico para completar.`);
+    } else if (aborted) {
+      status(byUser ? "Búsqueda cancelada."
+        : phase === "tap" ? "IRSA tardó más de 2 minutos en responder la consulta. Suele ser saturación del servidor: intenta de nuevo en un momento."
+        : "Los recortes tardaron demasiado y no llegó ninguno. Prueba con menos cuadros o intenta de nuevo.", "err");
+    } else if (e instanceof TypeError || (e && e.cause instanceof TypeError)) {
       status("El navegador no pudo conectarse directo con IRSA (casi seguro un bloqueo CORS). Configura el proxy (ver README) o usa los ejemplos pre-descargados.", "err");
       console.error(e);
     } else { status("Error: " + e.message, "err"); console.error(e); }
-  } finally { clearTimeout(timeout); setBusy(false); S.abort = null; }
+  } finally { clearTimeout(timer); setBusy(false); S.abort = null; }
 }
 
 /* ===== Datos pre-descargados (carpeta data/) y demo ===== */
@@ -455,7 +477,7 @@ $("share").onclick = async () => {
   const h = new URLSearchParams(location.hash.slice(1));
   if (h.get("ra") && h.get("dec")) {
     $("ra").value = h.get("ra"); $("dec").value = h.get("dec");
-    if (["0.08", "0.15", "0.3"].includes(h.get("size"))) $("size").value = h.get("size");
+    if (["0.03", "0.06", "0.1"].includes(h.get("size"))) $("size").value = h.get("size");
     $("form").requestSubmit();
   } else {
     setFrames(makeDemo(), true);
