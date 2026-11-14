@@ -1,5 +1,0 @@
-astropy
-astroquery
-numpy
-pillow
-reproject
