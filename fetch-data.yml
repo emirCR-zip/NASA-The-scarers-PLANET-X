@@ -1,0 +1,79 @@
+name: Descargar datos reales de SPHEREx
+
+# Se ejecuta a mano desde la pestaña "Actions" del repositorio.
+# Baja imágenes reales del archivo NASA/IPAC IRSA y las guarda en la carpeta data/.
+on:
+  workflow_dispatch:
+    inputs:
+      name:
+        description: "Nombre del objetivo (deja vacío para bajar los 3 ejemplos: Orión, Andrómeda y Pléyades)"
+        required: false
+        default: ""
+      ra:
+        description: "RA en grados (solo si pusiste nombre)"
+        required: false
+        default: ""
+      dec:
+        description: "Dec en grados (solo si pusiste nombre)"
+        required: false
+        default: ""
+      size:
+        description: "Campo en grados"
+        required: false
+        default: "0.1"
+      max_images:
+        description: "Máximo de cuadros por objetivo"
+        required: false
+        default: "30"
+
+permissions:
+  contents: write
+  pages: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Descargar datos de IRSA
+        env:
+          IN_NAME: ${{ inputs.name }}
+          IN_RA: ${{ inputs.ra }}
+          IN_DEC: ${{ inputs.dec }}
+          IN_SIZE: ${{ inputs.size }}
+          IN_MAX: ${{ inputs.max_images }}
+        run: |
+          fetch() {
+            python fetch_cutouts.py --name "$1" --ra "$2" --dec "$3" --size "$IN_SIZE" --max-images "$IN_MAX" \
+              || echo "::warning::No se pudo descargar $1"
+          }
+          if [ -n "$IN_NAME" ]; then
+            fetch "$IN_NAME" "$IN_RA" "$IN_DEC"
+          else
+            fetch "Nebulosa de Orion" 83.8221 -5.3911
+            fetch "Galaxia de Andromeda" 10.6847 41.2687
+            fetch "Pleyades" 56.75 24.1167
+          fi
+          ls -R data | head -40
+
+      - name: Guardar los datos en el repositorio
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data
+          git commit -m "Actualizar datos reales de SPHEREx" || echo "Sin cambios que guardar"
+          git push
+
+      - name: Pedir que GitHub Pages se actualice
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X POST "repos/${{ github.repository }}/pages/builds" || echo "Pages se actualizará solo"
