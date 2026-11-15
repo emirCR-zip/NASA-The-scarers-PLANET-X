@@ -1,0 +1,28 @@
+{
+  "version": "1.0",
+  "fuente": "NASA/JPL-Caltech/IPAC, via IRSA",
+  "nota": "Datos de ejemplo. Aun no son datos reales de SPHEREx.",
+  "regiones": [
+    {
+      "id": "region-01",
+      "nombre": "Region de prueba",
+      "ra": 150.0,
+      "dec": 2.2,
+      "radio_arcmin": 5,
+      "imagenes": [
+        {
+          "archivo": "images/region-01_epoca1.png",
+          "fecha": "2025-06-15",
+          "banda": 20,
+          "longitud_onda_um": 1.5
+        },
+        {
+          "archivo": "images/region-01_epoca2.png",
+          "fecha": "2025-12-10",
+          "banda": 20,
+          "longitud_onda_um": 1.5
+        }
+      ]
+    }
+  ]
+}
