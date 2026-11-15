@@ -28,7 +28,7 @@ const SkyLib = (() => {
 
   /* ---------- Consulta a IRSA ---------- */
   function buildQuery(ra, dec, size) {
-    return `SELECT 'https://irsa.ipac.caltech.edu/' || a.uri || '?center=${ra},${dec}d&size=${size}' AS uri, ` +
+    return `SELECT TOP 12 'https://irsa.ipac.caltech.edu/' || a.uri || '?center=${ra},${dec}d&size=${size}' AS uri, ` +
       `p.time_bounds_lower, p.energy_bandpassname, p.provenance_version ` +
       `FROM spherex.artifact a JOIN spherex.plane p ON a.planeid = p.planeid ` +
       `WHERE 1 = CONTAINS(POINT('ICRS', ${ra}, ${dec}), p.poly) ORDER BY p.time_bounds_lower`;
